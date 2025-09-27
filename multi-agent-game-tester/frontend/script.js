@@ -22,6 +22,7 @@ const resultsDisplay = document.getElementById('results-display');
 
 // State
 let currentSession = {
+    session_id: null,
     status: 'idle',
     counts: { generated: 0, selected: 0, executed: 0 }
 };
@@ -52,10 +53,10 @@ function updateUI() {
     executedCount.textContent = currentSession.counts.executed;
     
     // Update button states
-    generateBtn.disabled = currentSession.status === 'generating';
-    rankBtn.disabled = currentSession.status !== 'generated';
-    executeBtn.disabled = currentSession.status !== 'ranked';
-    viewResultsBtn.disabled = currentSession.status !== 'executed';
+    generateBtn.disabled = currentSession.status !== 'idle' && currentSession.status !== 'failed' && currentSession.status !== 'completed';
+    rankBtn.disabled = currentSession.status !== 'tests_generated';
+    executeBtn.disabled = currentSession.status !== 'tests_selected';
+    viewResultsBtn.disabled = currentSession.status !== 'completed';
 }
 
 async function apiCall(endpoint, method = 'GET', data = null) {
@@ -74,7 +75,9 @@ async function apiCall(endpoint, method = 'GET', data = null) {
         const response = await fetch(`${API_BASE}${endpoint}`, options);
         
         if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            const errorDetail = await response.text();
+            console.error('API Error Detail:', errorDetail);
+            throw new Error(`HTTP ${response.status}: ${response.statusText} - ${errorDetail}`);
         }
         
         return await response.json();
@@ -85,9 +88,19 @@ async function apiCall(endpoint, method = 'GET', data = null) {
 }
 
 async function refreshStatus() {
+    if (!currentSession.session_id) {
+        currentSession.status = 'idle';
+        updateUI();
+        return;
+    }
     try {
-        const status = await apiCall('/session-status');
-        currentSession = status;
+        const status = await apiCall(`/api/session-status/${currentSession.session_id}`);
+        currentSession.status = status.status;
+        if (status.generated_count !== undefined) currentSession.counts.generated = status.generated_count;
+        if (status.selected_count !== undefined) currentSession.counts.selected = status.selected_count;
+        if (status.execution_summary && status.execution_summary.total_tests !== undefined) {
+            currentSession.counts.executed = status.execution_summary.total_tests;
+        }
         updateUI();
     } catch (error) {
         console.error('Failed to refresh status:', error);
@@ -98,27 +111,21 @@ async function generateTests() {
     showLoading();
     try {
         showResult(generateResult, 'Generating test cases...', 'info');
-        
-        const result = await apiCall('/generate-tests', 'POST');
-        
-        let message = `✅ ${result.message}\n\n`;
-        message += `<div class="test-list">`;
-        
-        result.tests.slice(0, 5).forEach(test => {
-            message += `<div class="test-item">
-                <strong>${test.title}</strong><br>
-                Type: ${test.test_type} | Priority: ${test.priority}
-            </div>`;
-        });
-        
-        if (result.tests.length > 5) {
-            message += `<div class="test-item">... and ${result.tests.length - 5} more tests</div>`;
-        }
-        message += `</div>`;
-        
-        showResult(generateResult, message, 'success');
+
+        const gameUrl = document.getElementById('game-url')?.value || '';
+        const data = {
+            game_url: gameUrl,
+            num_tests: 20,
+            select_top: 10
+        };
+        const result = await apiCall('/api/generate-tests', 'POST', data);
+
+        currentSession.session_id = result.session_id;
+        currentSession.status = 'tests_generated';
+
+        showResult(generateResult, `✅ ${result.message}`, 'success');
         await refreshStatus();
-        
+
     } catch (error) {
         showResult(generateResult, `❌ Error: ${error.message}`, 'error');
     } finally {
@@ -127,24 +134,18 @@ async function generateTests() {
 }
 
 async function rankTests() {
+    if (!currentSession.session_id) {
+        showResult(rankResult, '❌ No active session. Generate tests first.', 'error');
+        return;
+    }
     showLoading();
     try {
         showResult(rankResult, 'Ranking and selecting tests...', 'info');
         
-        const result = await apiCall('/rank-tests', 'POST');
+        const result = await apiCall(`/api/rank-select/${currentSession.session_id}`, 'POST');
         
-        let message = `✅ ${result.message}\n\n`;
-        message += `<div class="test-list">`;
-        
-        result.selected_tests.forEach((test, index) => {
-            message += `<div class="test-item">
-                <strong>#${index + 1}: ${test.title}</strong><br>
-                Priority: ${test.priority} | Duration: ${test.estimated_duration}s
-            </div>`;
-        });
-        message += `</div>`;
-        
-        showResult(rankResult, message, 'success');
+        showResult(rankResult, `✅ ${result.message}`, 'success');
+        currentSession.status = 'tests_selected';
         await refreshStatus();
         
     } catch (error) {
@@ -155,26 +156,18 @@ async function rankTests() {
 }
 
 async function executeTests() {
+    if (!currentSession.session_id) {
+        showResult(executeResult, '❌ No active session. Rank tests first.', 'error');
+        return;
+    }
     showLoading();
     try {
         showResult(executeResult, 'Executing selected tests...', 'info');
         
-        const result = await apiCall('/execute-tests', 'POST');
+        const result = await apiCall(`/api/execute-tests/${currentSession.session_id}`, 'POST');
         
-        let message = `✅ ${result.message}\n\n`;
-        message += `<div class="test-list">`;
-        
-        result.results.forEach(exec => {
-            const statusIcon = exec.status === 'passed' ? '✅' : 
-                             exec.status === 'failed' ? '❌' : '⚠️';
-            message += `<div class="test-item">
-                ${statusIcon} <strong>${exec.test_title}</strong><br>
-                Status: ${exec.status} | ID: ${exec.execution_id}
-            </div>`;
-        });
-        message += `</div>`;
-        
-        showResult(executeResult, message, 'success');
+        showResult(executeResult, `✅ ${result.message}`, 'success');
+        currentSession.status = 'executing';
         await refreshStatus();
         
     } catch (error) {
@@ -185,29 +178,53 @@ async function executeTests() {
 }
 
 async function viewResults() {
+    if (!currentSession.session_id) {
+        showResult(resultsDisplay, '❌ No active session. Execute tests first.', 'error');
+        return;
+    }
     try {
-        const results = await apiCall('/execution-results');
+        const report = await apiCall(`/api/report/${currentSession.session_id}`);
         
-        let message = `📊 <strong>Test Execution Summary</strong>\n\n`;
+        let message = `📊 <strong>Test Execution Summary</strong><br><br>`;
         
-        const passed = results.filter(r => r.status === 'passed').length;
-        const failed = results.filter(r => r.status === 'failed').length;
-        const total = results.length;
+        const exec_report = report.execution_report || report;
+        const summary = exec_report.execution_summary;
+        if (summary) {
+            message += `
+                Total Tests: ${summary.total_tests}<br>
+                Passed: ${summary.passed}<br>
+                Failed: ${summary.failed}<br>
+                Success Rate: ${summary.success_rate}%<br>
+                Total Duration: ${summary.total_duration}s
+            <br><br>`;
+        }
         
-        message += `<div style="margin-bottom: 15px;">
-            <strong>Results:</strong> ${passed} passed, ${failed} failed, ${total} total<br>
-            <strong>Success Rate:</strong> ${((passed/total) * 100).toFixed(1)}%
-        </div>`;
+        const test_results = exec_report.test_results || [];
+        if (test_results.length > 0) {
+            message += `<div class="test-list">`;
+            test_results.slice(0, 10).forEach(result => {  // Show top 10
+                const statusIcon = result.status === 'passed' ? '✅' : '❌';
+                message += `<div class="test-item">
+                    ${statusIcon} <strong>${result.title}</strong><br>
+                    Status: ${result.status} | Duration: ${result.duration}s | Executor: ${result.executor_id}
+                    ${result.error_message ? `<br>Error: ${result.error_message}` : ''}
+                </div>`;
+            });
+            if (test_results.length > 10) {
+                message += `<div class="test-item">... and ${test_results.length - 10} more results</div>`;
+            }
+            message += `</div>`;
+        } else {
+            message += '<em>No test results available yet.</em>';
+        }
         
-        message += `<div class="test-list">`;
-        results.forEach(result => {
-            const statusIcon = result.status === 'passed' ? '✅' : '❌';
-            message += `<div class="test-item">
-                ${statusIcon} <strong>${result.test_case?.title || 'Test'}</strong><br>
-                Status: ${result.status} | Agent: ${result.agent_id}
-            </div>`;
-        });
-        message += `</div>`;
+        const analysis = report.analysis_report || report.analysis;
+        if (analysis) {
+            message += `<br><strong>Analysis Insights:</strong><br>`;
+            analysis.actionable_insights?.forEach(insight => {
+                message += `• ${insight}<br>`;
+            });
+        }
         
         showResult(resultsDisplay, message, 'info');
         
@@ -217,20 +234,25 @@ async function viewResults() {
 }
 
 async function resetSession() {
-    if (!confirm('Reset the current test session? This will clear all data.')) {
+    if (!currentSession.session_id || !confirm('Reset the current test session? This will clear all data.')) {
         return;
     }
     
     showLoading();
     try {
-        await apiCall('/reset-session', 'POST');
+        await apiCall(`/api/session/${currentSession.session_id}`, 'DELETE');
         
         // Clear all result displays
         [generateResult, rankResult, executeResult, resultsDisplay].forEach(el => {
             el.style.display = 'none';
         });
         
-        await refreshStatus();
+        currentSession = {
+            session_id: null,
+            status: 'idle',
+            counts: { generated: 0, selected: 0, executed: 0 }
+        };
+        updateUI();
         alert('Session reset successfully!');
         
     } catch (error) {
