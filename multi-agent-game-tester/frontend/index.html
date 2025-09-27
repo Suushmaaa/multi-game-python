@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multi-Agent Game Tester POC</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            padding: 40px;
+            max-width: 600px;
+            width: 100%;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            color: #4a90e2;
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .header .emoji {
+            font-size: 32px;
+            margin-right: 10px;
+        }
+
+        .status-bar {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+            text-align: center;
+            border-left: 4px solid #4a90e2;
+        }
+
+        .status-text {
+            font-weight: 600;
+            color: #495057;
+        }
+
+        .step {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 2px solid #e9ecef;
+            border-radius: 10px;
+            transition: all 0.3s ease;
+        }
+
+        .step:hover {
+            border-color: #4a90e2;
+            box-shadow: 0 4px 8px rgba(74, 144, 226, 0.1);
+        }
+
+        .step h3 {
+            color: #343a40;
+            margin-bottom: 15px;
+            font-size: 18px;
+        }
+
+        .btn {
+            background: #4a90e2;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn:hover:not(:disabled) {
+            background: #357abd;
+            transform: translateY(-2px);
+        }
+
+        .btn:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+
+        .btn.executing {
+            background: #17a2b8;
+        }
+
+        .success-message {
+            display: none;
+            background: #d4edda;
+            color: #155724;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+            border: 1px solid #c3e6cb;
+        }
+
+        .error-message {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+            border: 1px solid #f5c6cb;
+        }
+
+        .reset-container {
+            text-align: center;
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #dee2e6;
+        }
+
+        .reset-btn {
+            background: #dc3545;
+            color: white;
+        }
+
+        .reset-btn:hover {
+            background: #c82333;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #ffffff;
+            border-radius: 50%;
+            border-top-color: transparent;
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .report-container {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 15px;
+            text-align: center;
+        }
+
+        .report-btn {
+            background: #28a745;
+            margin-top: 10px;
+        }
+
+        .report-btn:hover {
+            background: #218838;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1><span class="emoji">🎮</span>Multi-Agent Game Tester POC</h1>
+        </div>
+
+        <div class="status-bar">
+            <div class="status-text">Generated: 0 | Selected: 0 | Executed: 0</div>
+        </div>
+
+        <div id="step1" class="step">
+            <h3>Step 1: Generate Test Cases</h3>
+            <button id="generate-btn" class="btn">
+                <span>🧪</span> Generate 20 Tests
+            </button>
+            <div class="success-message"></div>
+        </div>
+
+        <div id="step2" class="step">
+            <h3>Step 2: Rank & Select</h3>
+            <button id="select-btn" class="btn" disabled>
+                <span>📊</span> Select Top 10
+            </button>
+            <div class="success-message"></div>
+        </div>
+
+        <div id="step3" class="step">
+            <h3>Step 3: Execute Tests</h3>
+            <button id="execute-btn" class="btn" disabled>
+                <span>⚡</span> Execute Tests
+            </button>
+            <div class="success-message"></div>
+        </div>
+
+        <div class="reset-container">
+            <button id="reset-btn" class="btn reset-btn">
+                <span>🔄</span> Reset Session
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // JavaScript for API integration
+        let currentSessionId = null;
+
+        // Generate Tests
+        document.getElementById('generate-btn').addEventListener('click', async function() {
+            try {
+                this.disabled = true;
+                this.innerHTML = '<div class="loading"></div> Generating...';
+                
+                const response = await fetch('/api/generate-tests', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        game_url: "https://play.ezygamers.com/",
+                        num_tests: 20
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const result = await response.json();
+                currentSessionId = result.session_id;
+                
+                // Update UI
+                const successMsg = document.querySelector('#step1 .success-message');
+                successMsg.style.display = 'block';
+                successMsg.textContent = `✅ ${result.message}`;
+                
+                // Enable next step
+                document.getElementById('select-btn').disabled = false;
+                
+                // Update status
+                updateStatus('Generated: 20 | Selected: 0 | Executed: 0');
+                
+            } catch (error) {
+                console.error('Generation failed:', error);
+                showError('#step1', 'Test generation failed: ' + error.message);
+            } finally {
+                this.disabled = false;
+                this.innerHTML = '<span>🧪</span> Generate 20 Tests';
+            }
+        });
+
+        // Rank and Select Tests  
+        document.getElementById('select-btn').addEventListener('click', async function() {
+            if (!currentSessionId) {
+                alert('Please generate tests first');
+                return;
+            }
+            
+            try {
+                this.disabled = true;
+                this.innerHTML = '<div class="loading"></div> Selecting...';
+                
+                const response = await fetch(`/api/rank-select/${currentSessionId}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const result = await response.json();
+                
+                // Update UI
+                const successMsg = document.querySelector('#step2 .success-message');
+                successMsg.style.display = 'block';
+                successMsg.textContent = `✅ ${result.message}`;
+                
+                // Enable next step
+                document.getElementById('execute-btn').disabled = false;
+                
+                // Update status
+                updateStatus('Generated: 20 | Selected: 10 | Executed: 0');
+                
+            } catch (error) {
+                console.error('Selection failed:', error);
+                showError('#step2', 'Test selection failed: ' + error.message);
+            } finally {
+                this.disabled = false;
+                this.innerHTML = '<span>📊</span> Select Top 10';
+            }
+        });
+
+        // Execute Tests
+        document.getElementById('execute-btn').addEventListener('click', async function() {
+            if (!currentSessionId) {
+                alert('Please generate and select tests first');
+                return;
+            }
+            
+            try {
+                this.disabled = true;
+                this.classList.add('executing');
+                this.innerHTML = '<div class="loading"></div> Starting Execution...';
+                
+                const response = await fetch(`/api/execute-tests/${currentSessionId}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const result = await response.json();
+                
+                // Update UI
+                const successMsg = document.querySelector('#step3 .success-message');
+                successMsg.style.display = 'block';
+                successMsg.textContent = '🚀 Execution started! Monitoring progress...';
+                
+                // Start polling for status
+                this.innerHTML = '<div class="loading"></div> Executing...';
+                pollExecutionStatus();
+                
+            } catch (error) {
+                console.error('Execution failed:', error);
+                showError('#step3', 'Test execution failed: ' + error.message);
+                this.disabled = false;
+                this.classList.remove('executing');
+                this.innerHTML = '<span>⚡</span> Execute Tests';
+            }
+        });
+
+        // Reset Session
+        document.getElementById('reset-btn').addEventListener('click', async function() {
+            if (currentSessionId) {
+                try {
+                    await fetch(`/api/session/${currentSessionId}`, {
+                        method: 'DELETE'
+                    });
+                } catch (error) {
+                    console.log('Session cleanup failed:', error);
+                }
+            }
+            
+            // Reset UI
+            resetUI();
+        });
+
+        // Poll execution status
+        async function pollExecutionStatus() {
+            if (!currentSessionId) return;
+            
+            const maxAttempts = 120; // 4 minutes max
+            let attempts = 0;
+            
+            const interval = setInterval(async () => {
+                try {
+                    attempts++;
+                    
+                    const response = await fetch(`/api/session-status/${currentSessionId}`);
+                    if (!response.ok) {
+                        throw new Error('Status check failed');
+                    }
+                    
+                    const status = await response.json();
+                    
+                    if (status.status === 'completed') {
+                        clearInterval(interval);
+                        showExecutionComplete(status);
+                    } else if (status.status === 'failed') {
+                        clearInterval(interval);
+                        showExecutionFailed(status.error);
+                    } else if (attempts >= maxAttempts) {
+                        clearInterval(interval);
+                        showExecutionTimeout();
+                    }
+                    
+                    // Update progress indicator
+                    updateExecutionProgress(status);
+                    
+                } catch (error) {
+                    console.error('Status polling failed:', error);
+                    if (attempts >= 5) { // Give up after 5 failed attempts
+                        clearInterval(interval);
+                        showExecutionFailed('Status monitoring failed');
+                    }
+                }
+            }, 2000); // Poll every 2 seconds
+        }
+
+        function showExecutionComplete(status) {
+            const successMsg = document.querySelector('#step3 .success-message');
+            successMsg.textContent = `✅ Executed ${status.execution_summary?.total_tests || 10} tests! Success rate: ${status.execution_summary?.success_rate || 0}%`;
+            
+            const executeBtn = document.getElementById('execute-btn');
+            executeBtn.innerHTML = '<span>⚡</span> Execute Tests';
+            executeBtn.disabled = false;
+            executeBtn.classList.remove('executing');
+            
+            updateStatus('Generated: 20 | Selected: 10 | Executed: 10');
+            
+            // Show report link
+            showReportLink();
+        }
+
+        function showExecutionFailed(error) {
+            const successMsg = document.querySelector('#step3 .success-message');
+            successMsg.textContent = `❌ Execution failed: ${error}`;
+            successMsg.style.color = '#721c24';
+            
+            const executeBtn = document.getElementById('execute-btn');
+            executeBtn.innerHTML = '<span>⚡</span> Execute Tests';
+            executeBtn.disabled = false;
+            executeBtn.classList.remove('executing');
+        }
+
+        function showExecutionTimeout() {
+            const successMsg = document.querySelector('#step3 .success-message');
+            successMsg.textContent = '⏰ Execution timeout - check logs';
+            successMsg.style.color = '#856404';
+            
+            const executeBtn = document.getElementById('execute-btn');
+            executeBtn.innerHTML = '<span>⚡</span> Execute Tests';
+            executeBtn.disabled = false;
+            executeBtn.classList.remove('executing');
+        }
+
+        function updateExecutionProgress(status) {
+            let message = '🔄 Executing tests';
+            
+            if (status.execution_summary) {
+                const completed = (status.execution_summary.passed || 0) + (status.execution_summary.failed || 0);
+                const total = status.execution_summary.total_tests || 10;
+                message += ` (${completed}/${total} completed)`;
+            } else {
+                message += '...';
+            }
+            
+            document.querySelector('#step3 .success-message').textContent = message;
+        }
+
+        function showReportLink() {
+            if (!currentSessionId) return;
+            
+            const step3 = document.querySelector('#step3');
+            const existingReport = step3.querySelector('.report-container');
+            if (existingReport) return; // Already shown
+            
+            const reportContainer = document.createElement('div');
+            reportContainer.className = 'report-container';
+            reportContainer.innerHTML = `
+                <h4>📊 Test Report Ready</h4>
+                <p>Comprehensive analysis with artifacts and validation results</p>
+                <button onclick="openReport()" class="btn report-btn">
+                    <span>📋</span> View Detailed Report
+                </button>
+            `;
+            
+            step3.appendChild(reportContainer);
+        }
+
+        async function openReport() {
+            if (!currentSessionId) return;
+            
+            try {
+                const response = await fetch(`/api/report/${currentSessionId}`);
+                const report = await response.json();
+                
+                // Open report in new window
+                const reportWindow = window.open('', '_blank');
+                reportWindow.document.write(generateReportHTML(report));
+                
+            } catch (error) {
+                alert('Failed to load report: ' + error.message);
+            }
+        }
+
+        function generateReportHTML(report) {
+            return `
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Test Execution Report</title>
+                    <style>
+                        body { font-family: Arial, sans-serif; margin: 20px; line-height: 1.6; }
+                        .header { background: #4a90e2; color: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+                        .summary { background: #f8f9fa; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
+                        .passed { color: #28a745; font-weight: bold; }
+                        .failed { color: #dc3545; font-weight: bold; }
+                        .test-result { margin: 10px 0; padding: 15px; border-left: 4px solid #ddd; background: #f9f9f9; }
+                        .test-result.passed { border-left-color: #28a745; }
+                        .test-result.failed { border-left-color: #dc3545; }
+                        .artifacts { background: #fff; padding: 10px; margin: 5px 0; border-radius: 3px; border: 1px solid #ddd; }
+                        .analysis { background: #e9ecef; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
+                        .confidence { font-size: 24px; font-weight: bold; color: #4a90e2; }
+                    </style>
+                </head>
+                <body>
+                    <div class="header">
+                        <h1>🎮 Multi-Agent Game Test Report</h1>
+                        <p>Generated: ${report.generated_at}</p>
+                        <p>Session ID: ${report.session_id}</p>
+                    </div>
+                    
+                    <div class="summary">
+                        <h2>📊 Execution Summary</h2>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+                            <div><strong>Total Tests:</strong> ${report.execution_summary.total_tests}</div>
+                            <div><strong>Passed:</strong> <span class="passed">${report.execution_summary.passed}</span></div>
+                            <div><strong>Failed:</strong> <span class="failed">${report.execution_summary.failed}</span></div>
+                            <div><strong>Success Rate:</strong> ${report.execution_summary.success_rate}%</div>
+                            <div><strong>Total Duration:</strong> ${report.execution_summary.total_duration}s</div>
+                            <div><strong>Avg Duration:</strong> ${report.execution_summary.avg_execution_time}s</div>
+                        </div>
+                    </div>
+                    
+                    <div class="analysis">
+                        <h2>🔍 Analysis Results</h2>
+                        <div class="confidence">Overall Confidence: ${(report.analysis.overall_confidence * 100).toFixed(1)}%</div>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-top: 15px;">
+                            <div><strong>Reliability Score:</strong> ${(report.analysis.reliability_score * 100).toFixed(1)}%</div>
+                            <div><strong>Coverage Score:</strong> ${(report.analysis.coverage_score * 100).toFixed(1)}%</div>
+                            <div><strong>Quality Score:</strong> ${(report.analysis.quality_score * 100).toFixed(1)}%</div>
+                        </div>
+                        
+                        ${report.analysis.actionable_insights?.length ? `
+                            <h3>💡 Key Insights</h3>
+                            <ul>
+                                ${report.analysis.actionable_insights.map(insight => `<li>${insight}</li>`).join('')}
+                            </ul>
+                        ` : ''}
+                    </div>
+                    
+                    <h2>📋 Detailed Test Results</h2>
+                    ${report.test_results.map(test => `
+                        <div class="test-result ${test.status}">
+                            <h3>${test.title} <span class="${test.status}">[${test.status.toUpperCase()}]</span></h3>
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin: 10px 0;">
+                                <div><strong>Duration:</strong> ${test.duration ? test.duration.toFixed(2) + 's' : 'N/A'}</div>
+                                <div><strong>Executor:</strong> ${test.executor_id}</div>
+                                <div><strong>Start:</strong> ${test.start_time ? new Date(test.start_time).toLocaleTimeString() : 'N/A'}</div>
+                            </div>
+                            ${test.error_message ? `<div style="background: #f8d7da; padding: 10px; border-radius: 4px; margin: 10px 0;"><strong>Error:</strong> ${test.error_message}</div>` : ''}
+                            <div class="artifacts">
+                                <strong>📁 Artifacts Captured:</strong> ${test.artifacts.length} items
+                                ${test.artifacts.length > 0 ? `
+                                    <div style="margin-top: 5px;">
+                                        ${test.artifacts.map(a => `<span style="background: #e9ecef; padding: 2px 6px; border-radius: 3px; margin-right: 5px; font-size: 12px;">${a.type}</span>`).join('')}
+                                    </div>
+                                ` : ''}
+                            </div>
+                        </div>
+                    `).join('')}
+                    
+                    ${report.artifact_summary ? `
+                        <div style="margin-top: 30px; background: #f8f9fa; padding: 15px; border-radius: 5px;">
+                            <h3>📊 Artifact Summary</h3>
+                            <p><strong>Total Artifacts:</strong> ${report.artifact_summary.total_artifacts}</p>
+                            <div style="margin-top: 10px;">
+                                ${Object.entries(report.artifact_summary.artifact_types || {}).map(([type, count]) => 
+                                    `<span style="background: #4a90e2; color: white; padding: 4px 8px; border-radius: 4px; margin-right: 8px; font-size: 12px;">${type}: ${count}</span>`
+                                ).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+                    
+                    <div style="margin-top: 30px; padding: 15px; background: #e9ecef; border-radius: 5px; text-align: center;">
+                        <small>🤖 Generated by Multi-Agent Game Tester POC</small>
+                    </div>
+                </body>
+                </html>
+            `;
+        }
+
+        function showError(stepSelector, message) {
+            const step = document.querySelector(stepSelector);
+            let errorDiv = step.querySelector('.error-message');
+            
+            if (!errorDiv) {
+                errorDiv = document.createElement('div');
+                errorDiv.className = 'error-message';
+                step.appendChild(errorDiv);
+            }
+            
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+        }
+
+        function updateStatus(statusText) {
+            const statusElement = document.querySelector('.status-text');
+            if (statusElement) {
+                statusElement.textContent = statusText;
+            }
+        }
+
+        function resetUI() {
+            currentSessionId = null;
+            
+            // Hide all success messages
+            document.querySelectorAll('.success-message').forEach(el => {
+                el.style.display = 'none';
+                el.textContent = '';
+                el.style.color = '';
+            });
+            
+            // Hide all error messages
+            document.querySelectorAll('.error-message').forEach(el => {
+                el.style.display = 'none';
+            });
+            
+            // Reset buttons
+            const generateBtn = document.getElementById('generate-btn');
+            const selectBtn = document.getElementById('select-btn');
+            const executeBtn = document.getElementById('execute-btn');
+            
+            generateBtn.disabled = false;
+            generateBtn.innerHTML = '<span>🧪</span> Generate 20 Tests';
+            
+            selectBtn.disabled = true;
+            selectBtn.innerHTML = '<span>📊</span> Select Top 10';
+            
+            executeBtn.disabled = true;
+            executeBtn.innerHTML = '<span>⚡</span> Execute Tests';
+            executeBtn.classList.remove('executing');
+            
+            // Remove report containers
+            document.querySelectorAll('.report-container').forEach(el => el.remove());
+            
+            updateStatus('Generated: 0 | Selected: 0 | Executed: 0');
+        }
+    </script>
+</body>
+</html>
