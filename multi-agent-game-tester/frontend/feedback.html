@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent Feedback & Improvement</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        .card {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.1);
+        }
+        h1, h2 { color: #4A90E2; }
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .metric-box {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+        }
+        .metric-value {
+            font-size: 2em;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+        .star {
+            font-size: 2em;
+            cursor: pointer;
+            color: #ddd;
+            transition: color 0.2s;
+        }
+        .star.active { color: #FFD700; }
+        button {
+            background: linear-gradient(135deg, #4A90E2, #357ABD);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 600;
+        }
+        button:hover { transform: translateY(-2px); }
+        textarea {
+            width: 100%;
+            min-height: 80px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-family: inherit;
+        }
+        select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        .result {
+            margin-top: 15px;
+            padding: 15px;
+            border-radius: 8px;
+        }
+        .success { background: #d4edda; color: #155724; }
+        .info { background: #cce5ff; color: #004085; }
+        .pattern-item {
+            background: #f8f9fa;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 8px;
+            border-left: 4px solid #28a745;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <h1>Agent Improvement Dashboard</h1>
+            <p><a href="/">Back to Main Interface</a></p>
+        </div>
+
+        <div class="card">
+            <h2>Performance Metrics</h2>
+            <div class="metrics-grid">
+                <div class="metric-box">
+                    <div>Learned Patterns</div>
+                    <div class="metric-value" id="learnedCount">0</div>
+                </div>
+                <div class="metric-box">
+                    <div>Learning Status</div>
+                    <div class="metric-value" id="learningStatus">-</div>
+                </div>
+            </div>
+            <button onclick="loadMetrics()">Refresh Metrics</button>
+        </div>
+
+        <div class="card">
+            <h2>Submit Test Feedback</h2>
+            <label><strong>Select Test:</strong></label>
+            <select id="testSelect">
+                <option value="">-- Select a test --</option>
+            </select>
+            
+            <label><strong>Quality Rating:</strong></label>
+            <div style="display: flex; gap: 10px; margin: 15px 0;">
+                <span class="star" data-rating="1">★</span>
+                <span class="star" data-rating="2">★</span>
+                <span class="star" data-rating="3">★</span>
+                <span class="star" data-rating="4">★</span>
+                <span class="star" data-rating="5">★</span>
+            </div>
+            <input type="hidden" id="rating" value="0">
+            
+            <label><strong>Comments:</strong></label>
+            <textarea id="comments" placeholder="What worked well? What needs improvement?"></textarea>
+            
+            <button onclick="submitFeedback()">Submit Feedback</button>
+            <div id="feedbackResult"></div>
+        </div>
+
+        <div class="card">
+            <h2>Learned Patterns</h2>
+            <button onclick="loadPatterns()">Load Learned Patterns</button>
+            <div id="patternsList"></div>
+        </div>
+    </div>
+
+    <script>
+        let selectedRating = 0;
+        let availableTests = [];
+
+        // Star rating
+        document.querySelectorAll('.star').forEach(star => {
+            star.addEventListener('click', function() {
+                selectedRating = parseInt(this.dataset.rating);
+                document.getElementById('rating').value = selectedRating;
+                
+                document.querySelectorAll('.star').forEach((s, idx) => {
+                    s.classList.toggle('active', idx < selectedRating);
+                });
+            });
+        });
+
+        async function loadTests() {
+            try {
+                // Get latest session
+                const sessionId = localStorage.getItem('current_session');
+                if (!sessionId) {
+                    document.getElementById('testSelect').innerHTML = '<option>Run tests first</option>';
+                    return;
+                }
+
+                const response = await fetch(`http://localhost:8000/api/report/${sessionId}`);
+                if (!response.ok) {
+                    document.getElementById('testSelect').innerHTML = '<option>Run tests first</option>';
+                    return;
+                }
+                const report = await response.json();
+
+                const select = document.getElementById('testSelect');
+                select.innerHTML = '<option value="">-- Select a test --</option>';
+
+                report.test_results.forEach(test => {
+                    const option = document.createElement('option');
+                    option.value = test.test_id;
+                    option.textContent = `${test.title} [${test.status}]`;
+                    select.appendChild(option);
+                    availableTests.push(test);
+                });
+            } catch (error) {
+                console.error('Failed to load tests:', error);
+                document.getElementById('testSelect').innerHTML = '<option>Run tests first</option>';
+            }
+        }
+
+        async function submitFeedback() {
+            const testId = document.getElementById('testSelect').value;
+            const rating = selectedRating;
+            const comments = document.getElementById('comments').value;
+
+            if (!testId || rating === 0) {
+                alert('Please select a test and rating');
+                return;
+            }
+
+            try {
+                // FIX: Send as query parameters instead of JSON body
+                const response = await fetch(`http://localhost:8000/api/feedback/${testId}?rating=${rating}&comments=${encodeURIComponent(comments)}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    alert(`Failed to submit feedback: ${errorData.detail || response.statusText}`);
+                    return;
+                }
+
+                const result = await response.json();
+
+                const resultDiv = document.getElementById('feedbackResult');
+                resultDiv.className = 'result success';
+                resultDiv.innerHTML = `
+                    Feedback submitted successfully!<br>
+                    Combined Score: ${result.combined_score.toFixed(2)}<br>
+                    ${result.learning_status}
+                `;
+
+                // Refresh metrics
+                loadMetrics();
+
+                // Reset form
+                selectedRating = 0;
+                document.querySelectorAll('.star').forEach(s => s.classList.remove('active'));
+                document.getElementById('comments').value = '';
+
+            } catch (error) {
+                alert('Failed to submit feedback: ' + error.message);
+            }
+        }
+
+        async function loadMetrics() {
+            try {
+                const response = await fetch('http://localhost:8000/api/improvement-metrics');
+                const metrics = await response.json();
+                
+                document.getElementById('learnedCount').textContent = metrics.high_quality_patterns_learned || 0;
+                document.getElementById('learningStatus').textContent = metrics.learning_enabled ? 'Active' : 'Collecting';
+                
+            } catch (error) {
+                console.error('Failed to load metrics:', error);
+            }
+        }
+
+        async function loadPatterns() {
+            try {
+                const response = await fetch('http://localhost:8000/api/learned-patterns');
+                const data = await response.json();
+                
+                const listDiv = document.getElementById('patternsList');
+                
+                if (data.total_patterns === 0) {
+                    listDiv.innerHTML = '<p>No patterns learned yet. Submit feedback on high-quality tests!</p>';
+                    return;
+                }
+                
+                listDiv.innerHTML = `<p>Total: ${data.total_patterns} patterns</p>`;
+                
+                data.patterns.forEach(pattern => {
+                    const div = document.createElement('div');
+                    div.className = 'pattern-item';
+                    div.innerHTML = `
+                        <strong>${pattern.title}</strong><br>
+                        Quality Score: ${pattern.quality_score}<br>
+                        Test ID: ${pattern.test_id}
+                    `;
+                    listDiv.appendChild(div);
+                });
+                
+            } catch (error) {
+                console.error('Failed to load patterns:', error);
+            }
+        }
+
+        // Initialize
+        loadTests();
+        loadMetrics();
+    </script>
+</body>
+</html>

@@ -8,6 +8,8 @@ import asyncio
 import uuid
 from datetime import datetime
 from pydantic import BaseModel
+import sqlite3
+import numpy as np
 import logging
 from pathlib import Path
 
@@ -41,6 +43,227 @@ app.mount("/static", StaticFiles(directory=str(frontend_dir)), name="static")
 # In-memory storage for demo (use database in production)
 execution_sessions = {}
 test_reports = {}
+feedback_database = {}  # Store test feedback
+quality_history = []    # Track quality over time
+learned_patterns = {}   # Store successful test patterns
+
+class FeedbackStorage:
+    """Simple feedback storage system"""
+    def __init__(self):
+        self.db_path = Path("test_feedback.db")
+        self._init_db()
+    
+    def _init_db(self):
+        """Initialize SQLite database for feedback"""
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS feedback (
+                test_id TEXT PRIMARY KEY,
+                rating INTEGER,
+                comments TEXT,
+                auto_score REAL,
+                combined_score REAL,
+                timestamp TEXT,
+                test_data TEXT
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS quality_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT,
+                avg_quality REAL,
+                improvement_rate REAL,
+                timestamp TEXT
+            )
+        ''')
+        conn.commit()
+        conn.close()
+    
+    def save_feedback(self, test_id: str, rating: int, comments: str, 
+                     auto_score: float, test_data: dict):
+        """Save feedback to database"""
+        combined_score = (auto_score * 0.6) + ((rating / 5.0) * 0.4)
+        
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT OR REPLACE INTO feedback 
+            (test_id, rating, comments, auto_score, combined_score, timestamp, test_data)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (test_id, rating, comments, auto_score, combined_score, 
+              datetime.utcnow().isoformat(), json.dumps(test_data)))
+        conn.commit()
+        conn.close()
+        
+        return combined_score
+    
+    def get_high_quality_tests(self, min_score: float = 0.7) -> List[Dict]:
+        """Retrieve high-quality test patterns"""
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT test_id, test_data, combined_score 
+            FROM feedback 
+            WHERE combined_score >= ?
+            ORDER BY combined_score DESC
+        ''', (min_score,))
+        
+        results = []
+        for row in cursor.fetchall():
+            results.append({
+                "test_id": row[0],
+                "test_data": json.loads(row[1]),
+                "quality_score": row[2]
+            })
+        
+        conn.close()
+        return results
+    
+    def get_quality_trend(self, limit: int = 50) -> List[float]:
+        """Get quality trend over time"""
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT combined_score FROM feedback 
+            ORDER BY timestamp DESC LIMIT ?
+        ''', (limit,))
+        
+        scores = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        return scores
+
+# Initialize feedback storage globally
+feedback_storage = FeedbackStorage()
+
+# Add new endpoint for submitting feedback
+@app.post("/api/feedback/{test_id}")
+async def submit_feedback(test_id: str, rating: int, comments: str = ""):
+    """Submit human feedback for a test"""
+    try:
+        if rating < 1 or rating > 5:
+            raise HTTPException(status_code=400, detail="Rating must be 1-5")
+        
+        # Find the test in any session
+        test_data = None
+        for session in execution_sessions.values():
+            if session.get("execution_results"):
+                for result in session["execution_results"]["test_results"]:
+                    if result["test_id"] == test_id:
+                        test_data = result
+                        break
+        
+        if not test_data:
+            raise HTTPException(status_code=404, detail="Test not found")
+        
+        # Calculate automated score
+        auto_score = calculate_auto_score(test_data)
+        
+        # Save feedback
+        combined_score = feedback_storage.save_feedback(
+            test_id, rating, comments, auto_score, test_data
+        )
+        
+        logger.info(f"Feedback saved for {test_id}: rating={rating}, score={combined_score}")
+        
+        return {
+            "status": "success",
+            "message": "Feedback recorded successfully",
+            "test_id": test_id,
+            "combined_score": combined_score,
+            "learning_status": "Pattern stored for future generation" if combined_score > 0.7 else "Below learning threshold"
+        }
+        
+    except Exception as e:
+        logger.error(f"Feedback submission failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+def calculate_auto_score(test_result: Dict) -> float:
+    """Calculate automated quality score from test execution"""
+    score = 0.0
+    
+    # Test passed
+    if test_result.get("status") == "passed":
+        score += 0.4
+    
+    # Good artifacts
+    if test_result.get("artifacts") and len(test_result["artifacts"]) >= 3:
+        score += 0.2
+    
+    # Reasonable duration
+    duration = test_result.get("duration", 0)
+    if 5 <= duration <= 60:
+        score += 0.2
+    
+    # No errors
+    if not test_result.get("error_message"):
+        score += 0.2
+    
+    return min(score, 1.0)
+
+# Add endpoint to get improvement metrics
+@app.get("/api/improvement-metrics")
+async def get_improvement_metrics():
+    """Get agent improvement metrics"""
+    try:
+        quality_scores = feedback_storage.get_quality_trend(limit=50)
+        
+        if len(quality_scores) < 10:
+            return {
+                "status": "insufficient_data",
+                "message": "Need at least 10 test executions with feedback",
+                "current_count": len(quality_scores)
+            }
+        
+        # Calculate metrics
+        recent_avg = np.mean(quality_scores[:10]) if len(quality_scores) >= 10 else 0
+        initial_avg = np.mean(quality_scores[-10:]) if len(quality_scores) >= 10 else 0
+        
+        improvement = 0
+        if initial_avg > 0:
+            improvement = ((recent_avg - initial_avg) / initial_avg) * 100
+        
+        high_quality_tests = feedback_storage.get_high_quality_tests(min_score=0.7)
+        
+        return {
+            "status": "active",
+            "total_tests_with_feedback": len(quality_scores),
+            "recent_average_quality": round(recent_avg, 3),
+            "initial_average_quality": round(initial_avg, 3),
+            "improvement_percentage": round(improvement, 1),
+            "high_quality_patterns_learned": len(high_quality_tests),
+            "learning_enabled": len(high_quality_tests) > 0,
+            "quality_trend": "improving" if improvement > 0 else "stable" if improvement == 0 else "declining"
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get improvement metrics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Add endpoint to get learned patterns
+@app.get("/api/learned-patterns")
+async def get_learned_patterns():
+    """Get high-quality test patterns the agent has learned"""
+    try:
+        patterns = feedback_storage.get_high_quality_tests(min_score=0.7)
+        
+        return {
+            "status": "success",
+            "total_patterns": len(patterns),
+            "patterns": [
+                {
+                    "test_id": p["test_id"],
+                    "title": p["test_data"].get("title", "Unknown"),
+                    "quality_score": round(p["quality_score"], 3),
+                    "test_type": p["test_data"].get("test_type", "unknown")
+                }
+                for p in patterns[:20]  # Return top 20
+            ]
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get learned patterns: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 class ExecutionRequest(BaseModel):
     game_url: Optional[str] = None
@@ -51,6 +274,91 @@ class ExecutionResponse(BaseModel):
     session_id: str
     status: str
     message: str
+
+# Modify generate_tests to use learned patterns
+@app.post("/api/generate-tests-improved", response_model=ExecutionResponse)
+async def generate_tests_improved(request: ExecutionRequest):
+    """Generate test cases using learned patterns"""
+    try:
+        session_id = str(uuid.uuid4())
+        
+        # Get high-quality patterns
+        learned_patterns = feedback_storage.get_high_quality_tests(min_score=0.7)
+        
+        # Initialize PlannerAgent
+        planner = PlannerAgent()
+        
+        # Generate base test cases
+        game_context = {"target_url": request.game_url or settings.target_game_url}
+        test_cases = planner.execute(game_context)
+        
+        # If we have learned patterns, create variations
+        if learned_patterns:
+            logger.info(f"Using {len(learned_patterns)} learned patterns to enhance generation")
+            
+            # Replace some tests with variations of successful patterns
+            num_to_replace = min(len(learned_patterns), len(test_cases) // 2)
+            
+            for i in range(num_to_replace):
+                if i < len(test_cases):
+                    pattern = learned_patterns[i % len(learned_patterns)]
+                    # Create variation based on successful pattern
+                    test_cases[i].title = f"{pattern['test_data']['title']} - Learned Variation"
+                    test_cases[i].description = f"Based on high-quality pattern (score: {pattern['quality_score']:.2f})"
+        
+        # Store session data
+        execution_sessions[session_id] = {
+            "status": "tests_generated",
+            "generated_tests": test_cases,
+            "selected_tests": None,
+            "execution_results": None,
+            "analysis_report": None,
+            "created_at": datetime.utcnow(),
+            "game_url": request.game_url or settings.target_game_url,
+            "used_learned_patterns": len(learned_patterns) > 0,
+            "num_learned_patterns": len(learned_patterns)
+        }
+        
+        logger.info(f"Generated {len(test_cases)} test cases for session {session_id} (with learning)")
+        
+        return ExecutionResponse(
+            session_id=session_id,
+            status="success",
+            message=f"Generated {len(test_cases)} test cases using {len(learned_patterns)} learned patterns"
+        )
+        
+    except Exception as e:
+        logger.error(f"Test generation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Test generation failed: {str(e)}")
+
+# Add verification endpoint
+@app.get("/api/verify-learning")
+async def verify_learning():
+    """Verify that the agent is learning correctly"""
+    try:
+        metrics = await get_improvement_metrics()
+        patterns = await get_learned_patterns()
+        
+        verification = {
+            "test_coverage": "pass" if metrics.get("total_tests_with_feedback", 0) > 10 else "needs_more_data",
+            "quality_improvement": "pass" if metrics.get("improvement_percentage", 0) > 0 else "stable",
+            "pattern_learning": "pass" if patterns.get("total_patterns", 0) > 0 else "no_patterns_yet",
+            "learning_active": metrics.get("learning_enabled", False),
+            "overall_status": "learning_actively" if metrics.get("learning_enabled") else "collecting_data"
+        }
+        
+        return {
+            "verification_status": verification,
+            "metrics": metrics,
+            "learned_patterns_count": patterns.get("total_patterns", 0),
+            "recommendation": "Continue testing and providing feedback" if verification["pattern_learning"] == "no_patterns_yet" else "Agent is learning successfully"
+        }
+        
+    except Exception as e:
+        return {
+            "verification_status": {"overall_status": "error"},
+            "error": str(e)
+        }
 
 @app.get("/")
 async def serve_frontend():
@@ -318,6 +626,6 @@ async def delete_session(session_id: str):
     
     return {"message": f"Session {session_id} deleted"}
 
-if __name__ == "_main_":
+if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

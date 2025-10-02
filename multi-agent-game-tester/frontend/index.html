@@ -182,6 +182,11 @@
             <h1><span class="emoji">🎮</span>Multi-Agent Game Tester POC</h1>
         </div>
 
+        <p>
+            <a href="https://play.ezygamers.com/" target="_blank" style="color: #FFD700;">🎯 Target Game</a> |
+            <a href="/static/feedback.html" style="color: #FFD700;">📊 Feedback & Learning Dashboard</a>
+        </p>
+
         <div class="status-bar">
             <div class="status-text">Generated: 0 | Selected: 0 | Executed: 0</div>
         </div>
@@ -244,6 +249,7 @@
                 
                 const result = await response.json();
                 currentSessionId = result.session_id;
+                localStorage.setItem('current_session', result.session_id);
                 
                 // Update UI
                 const successMsg = document.querySelector('#step1 .success-message');
