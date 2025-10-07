@@ -9,12 +9,13 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agents.base_agent import BaseAgent
 from models.test_case import TestCase, TestStep, TestType, Priority
 from config import settings
+from utils.rag_utils import rag_system
 
 class PlannerAgent(BaseAgent):
     def __init__(self):
         super().__init__("PlannerAgent")
         self.setup_system_prompt()
-    
+
     def setup_system_prompt(self):
         system_prompt = f"""
 You are an expert test case generator for web-based number/math puzzle games.
@@ -26,7 +27,7 @@ Your task is to generate {settings.num_candidate_tests} diverse, comprehensive t
 
 FOCUS AREAS:
 1. Core Game Mechanics - number input, calculations, scoring
-2. UI Interactions - buttons, forms, navigation  
+2. UI Interactions - buttons, forms, navigation
 3. Edge Cases - invalid inputs, boundary values, large numbers
 4. User Experience - loading times, feedback, error handling
 5. Game Flow - start, progress, completion, restart
@@ -62,18 +63,96 @@ For each test case, provide JSON in this exact format:
 Return a JSON array with exactly {settings.num_candidate_tests} test cases.
 """
         self.add_system_message(system_prompt)
-    
+
     def execute(self, game_context: Dict[str, Any] = None) -> List[TestCase]:
         """Generate test cases for the target game"""
         self.logger.info(f"Generating {settings.num_candidate_tests} test cases")
-        
-        # For now, return mock test cases (we'll implement OpenAI integration later)
-        return self._generate_mock_tests()
-    
+
+        if self.llm:
+            try:
+                return self._generate_with_llm(game_context)
+            except Exception as e:
+                self.logger.warning(f"LLM generation failed: {e}, falling back to mock")
+                return self._generate_mock_tests()
+        else:
+            return self._generate_mock_tests()
+
+    def _generate_with_llm(self, game_context: Dict[str, Any] = None) -> List[TestCase]:
+        """Generate test cases using LLM with RAG augmentation"""
+        # Retrieve relevant patterns from RAG
+        query = f"test cases for {settings.target_game_url} math puzzle game"
+        relevant_patterns = rag_system.retrieve_relevant_patterns(query, k=3)
+
+        # Augment system prompt with retrieved patterns
+        augmented_prompt = self.conversation_history[0]["content"]  # Base system prompt
+
+        if relevant_patterns:
+            augmented_prompt += "\n\nLEARNED PATTERNS FROM SUCCESSFUL TESTS:\n"
+            for i, pattern in enumerate(relevant_patterns, 1):
+                augmented_prompt += f"\nPattern {i} (Quality: {pattern['metadata'].get('quality_score', 0)}):\n"
+                augmented_prompt += pattern["content"][:500] + "...\n"  # Truncate for brevity
+
+        # Create user message
+        user_message = f"Generate {settings.num_candidate_tests} test cases for the math puzzle game at {settings.target_game_url}. Focus on comprehensive coverage including functional, usability, performance, boundary, and error handling tests."
+
+        # Call LLM
+        messages = [
+            {"role": "system", "content": augmented_prompt},
+            {"role": "user", "content": user_message}
+        ]
+
+        response = self.llm.invoke(messages)
+        response_text = response.content if hasattr(response, 'content') else str(response)
+
+        # Parse JSON response
+        try:
+            # Extract JSON from response (might be wrapped in markdown)
+            json_start = response_text.find('[')
+            json_end = response_text.rfind(']') + 1
+            if json_start != -1 and json_end > json_start:
+                json_str = response_text[json_start:json_end]
+                test_data = json.loads(json_str)
+            else:
+                test_data = json.loads(response_text)
+
+            # Convert to TestCase objects
+            test_cases = []
+            for test_dict in test_data:
+                steps = []
+                for step_data in test_dict.get("steps", []):
+                    step = TestStep(
+                        action=step_data.get("action", "navigate"),
+                        target=step_data.get("target", ""),
+                        expected_result=step_data.get("expected_result", ""),
+                        wait_time=step_data.get("wait_time", 2.0),
+                        screenshot=step_data.get("screenshot", True)
+                    )
+                    steps.append(step)
+
+                test_case = TestCase(
+                    title=test_dict.get("title", "Generated Test"),
+                    description=test_dict.get("description", ""),
+                    test_type=TestType(test_dict.get("test_type", "functional").upper()),
+                    priority=Priority(test_dict.get("priority", "medium").upper()),
+                    steps=steps,
+                    expected_outcome=test_dict.get("expected_outcome", ""),
+                    preconditions=test_dict.get("preconditions", []),
+                    tags=test_dict.get("tags", ["generated"]),
+                    estimated_duration=test_dict.get("estimated_duration", 30.0)
+                )
+                test_cases.append(test_case)
+
+            self.logger.info(f"Generated {len(test_cases)} test cases with LLM")
+            return test_cases
+
+        except Exception as e:
+            self.logger.error(f"Failed to parse LLM response: {e}")
+            raise
+
     def _generate_mock_tests(self) -> List[TestCase]:
         """Generate mock test cases for development"""
         test_cases = []
-        
+
         test_templates = [
             {
                 "title": "Basic Game Load Test",
@@ -88,7 +167,7 @@ Return a JSON array with exactly {settings.num_candidate_tests} test cases.
                 "tags": ["smoke", "critical"]
             },
             {
-                "title": "Number Input Validation", 
+                "title": "Number Input Validation",
                 "description": "Test basic number input functionality",
                 "test_type": TestType.FUNCTIONAL,
                 "priority": Priority.HIGH,
@@ -173,30 +252,30 @@ Return a JSON array with exactly {settings.num_candidate_tests} test cases.
                 "tags": ["ui", "feedback"]
             }
         ]
-        
+
         # Generate test cases based on templates, cycling through them
         template_index = 0
         for i in range(settings.num_candidate_tests):
             template = test_templates[template_index % len(test_templates)]
             template_index += 1
-            
+
             steps = []
             for step_data in template["steps"]:
                 step = TestStep(
                     action=step_data["action"],
-                    target=step_data["target"], 
+                    target=step_data["target"],
                     expected_result=step_data["expected_result"],
                     wait_time=2.0,
                     screenshot=True
                 )
                 steps.append(step)
-            
+
             # Create unique title by adding variation number
             variation_num = (i // len(test_templates)) + 1
             title = template["title"]
             if variation_num > 1:
                 title += f" - Variation {variation_num}"
-            
+
             test_case = TestCase(
                 title=title,
                 description=template["description"],
@@ -208,6 +287,6 @@ Return a JSON array with exactly {settings.num_candidate_tests} test cases.
                 estimated_duration=30.0 + (len(steps) * 5)  # Base 30s + 5s per step
             )
             test_cases.append(test_case)
-        
+
         self.logger.info(f"Generated {len(test_cases)} mock test cases")
         return test_cases

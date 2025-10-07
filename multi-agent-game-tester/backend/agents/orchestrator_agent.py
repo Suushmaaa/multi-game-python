@@ -4,7 +4,8 @@ import concurrent.futures
 from datetime import datetime
 from .base_agent import BaseAgent
 from .executor_agent import ExecutorAgent
-from ..models.test_case import TestCase, TestResult, TestStatus
+from ..models.test_case import TestCase
+from ..models.test_result import TestResult, TestStatus
 from ..config import settings
 
 class OrchestratorAgent(BaseAgent):

@@ -14,12 +14,14 @@ import logging
 from pathlib import Path
 
 # Import your agents
-from agents.planner_agent import PlannerAgent
-from agents.ranker_agent import RankerAgent
-# from agents.orchestrator_agent import OrchestratorAgent
-# from agents.analyzer_agent import AnalyzerAgent
-from models.test_case import TestCase
-from config import settings
+from .agents.planner_agent import PlannerAgent
+from .agents.ranker_agent import RankerAgent
+from .agents.executor_agent import ExecutorAgent
+# from .agents.orchestrator_agent import OrchestratorAgent
+# from .agents.analyzer_agent import AnalyzerAgent
+from .models.test_case import TestCase
+from .config import settings
+from .utils.rag_utils import rag_system
 
 # Configure logging
 logging.basicConfig(level=getattr(logging, settings.log_level))
@@ -163,9 +165,40 @@ async def submit_feedback(test_id: str, rating: int, comments: str = ""):
         combined_score = feedback_storage.save_feedback(
             test_id, rating, comments, auto_score, test_data
         )
-        
+
+        # If high quality, add to RAG system for future learning
+        if combined_score > 0.7:
+            try:
+                # Create a pattern document for RAG
+                pattern_content = f"""
+Test Title: {test_data.get('title', 'Unknown')}
+Test Type: {test_data.get('test_type', 'unknown')}
+Description: {test_data.get('description', '')}
+Status: {test_data.get('status', 'unknown')}
+Duration: {test_data.get('duration', 0)} seconds
+Rating: {rating}/5
+Comments: {comments}
+Combined Score: {combined_score:.2f}
+
+This is a high-quality test pattern that can be used as a template for similar test generation.
+"""
+                # Add to RAG system
+                rag_system.add_pattern(
+                    content=pattern_content,
+                    metadata={
+                        "test_id": test_id,
+                        "quality_score": combined_score,
+                        "test_type": test_data.get("test_type", "unknown"),
+                        "rating": rating,
+                        "game_url": settings.target_game_url,
+                        "source": "human_feedback"
+                    }
+                )
+                logger.info(f"Added high-quality pattern to RAG system: {test_id}")
+            except Exception as e:
+                logger.warning(f"Failed to add pattern to RAG: {e}")
+
         logger.info(f"Feedback saved for {test_id}: rating={rating}, score={combined_score}")
-        
         return {
             "status": "success",
             "message": "Feedback recorded successfully",
@@ -173,7 +206,6 @@ async def submit_feedback(test_id: str, rating: int, comments: str = ""):
             "combined_score": combined_score,
             "learning_status": "Pattern stored for future generation" if combined_score > 0.7 else "Below learning threshold"
         }
-        
     except Exception as e:
         logger.error(f"Feedback submission failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -439,44 +471,79 @@ async def rank_and_select_tests(session_id: str, num_selected: Optional[int] = 1
 
 @app.post("/api/execute-tests/{session_id}", response_model=ExecutionResponse)
 async def execute_tests(session_id: str, background_tasks: BackgroundTasks):
-    """Execute selected tests - Mock implementation for now"""
+    """Execute selected tests using real browser automation"""
     try:
         if session_id not in execution_sessions:
             raise HTTPException(status_code=404, detail="Session not found")
-        
+
         session = execution_sessions[session_id]
-        
+
         if session["status"] != "tests_selected":
-            raise HTTPException(status_code=400, detail="Invalid session state for execution")
-        
-        # Start mock execution in background
-        background_tasks.add_task(execute_tests_mock, session_id)
-        
+            background_tasks.add_task(execute_tests_real, session_id)
+
+        # Start real execution in background
+
         # Update session status
         session["status"] = "executing"
-        
-        logger.info(f"Started execution for session {session_id}")
-        
+
+        logger.info(f"Started real execution for session {session_id}")
+
         return ExecutionResponse(
             session_id=session_id,
             status="started",
             message=f"Started execution of {len(session['selected_tests'])} test cases"
         )
-        
     except Exception as e:
         logger.error(f"Test execution start failed: {e}")
         raise HTTPException(status_code=500, detail=f"Test execution start failed: {str(e)}")
 
+async def execute_tests_real(session_id: str):
+    """Execute tests using real browser automation with ExecutorAgent"""
+    try:
+        session = execution_sessions[session_id]
+        selected_tests = session["selected_tests"]
+
+        logger.info(f"Starting real execution of {len(selected_tests)} tests for session {session_id}")
+
+        # Initialize ExecutorAgent
+        executor = ExecutorAgent()
+
+        # Execute tests
+        execution_result = executor.execute({
+            "test_cases": selected_tests,
+            "game_url": session.get("game_url", settings.target_game_url)
+        })
+
+        # Update session with results
+        session["status"] = "completed"
+        session["execution_results"] = execution_result
+        session["completed_at"] = datetime.utcnow()
+
+        # Store final report
+        test_reports[session_id] = {
+            "session_id": session_id,
+            "execution_report": execution_result,
+            "generated_at": datetime.utcnow()
+        }
+
+        logger.info(f"Real execution completed for session {session_id}")
+
+    except Exception as e:
+        logger.error(f"Real execution failed: {e}")
+        session = execution_sessions.get(session_id, {})
+        session["status"] = "failed"
+        session["error"] = str(e)
+
+
 async def execute_tests_mock(session_id: str):
     """Mock test execution for demo purposes"""
     try:
-        import time
         session = execution_sessions[session_id]
         selected_tests = session["selected_tests"]
-        
+
         # Simulate execution time
         await asyncio.sleep(10)  # Simulate 10 seconds of execution
-        
+
         # Create mock results
         mock_results = {
             "execution_summary": {
@@ -507,12 +574,12 @@ async def execute_tests_mock(session_id: str):
                 "total_artifacts": len(selected_tests) * 3,
                 "artifact_types": {
                     "screenshot": len(selected_tests),
-                    "dom_snapshot": len(selected_tests), 
+                    "dom_snapshot": len(selected_tests),
                     "console_log": len(selected_tests)
                 }
             }
         }
-        
+
         # Mock analysis
         mock_analysis = {
             "overall_confidence": 0.85,
@@ -525,13 +592,13 @@ async def execute_tests_mock(session_id: str):
                 "All tests captured complete artifact sets"
             ]
         }
-        
+
         # Update session with results
         session["status"] = "completed"
         session["execution_results"] = mock_results
         session["analysis_report"] = mock_analysis
         session["completed_at"] = datetime.utcnow()
-        
+
         # Store final report
         test_reports[session_id] = {
             "session_id": session_id,
@@ -539,15 +606,14 @@ async def execute_tests_mock(session_id: str):
             "analysis_report": mock_analysis,
             "generated_at": datetime.utcnow()
         }
-        
+
         logger.info(f"Mock execution completed for session {session_id}")
-        
+
     except Exception as e:
         logger.error(f"Mock execution failed: {e}")
         session = execution_sessions.get(session_id, {})
         session["status"] = "failed"
         session["error"] = str(e)
-
 @app.get("/api/session-status/{session_id}")
 async def get_session_status(session_id: str):
     """Get current session status"""

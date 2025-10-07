@@ -1,37 +1,18 @@
-# Fix Import Errors in Multi-Agent Game Tester
+# TODO: Implement LangChain and RAG Integration
 
-## Problem
-ModuleNotFoundError: No module named 'agents' when running agent files. This is due to absolute imports in subpackages that should be relative.
+## Completed Tasks
+- [x] Implement feedback system with SQLite storage
+- [x] Add RAG system integration for learning high-quality patterns
+- [x] Create feedback endpoints (/api/feedback/{test_id}, /api/improvement-metrics, /api/learned-patterns)
+- [x] Add learning verification endpoint (/api/verify-learning)
+- [x] Update generate-tests-improved to use learned patterns
 
-## Files to Fix
-- [x] backend/agents/executor_agent.py
-- [x] backend/agents/analyzer_agent.py
-- [x] backend/agents/planner_agent.py
-- [x] backend/agents/ranker_agent.py
-- [x] backend/agents/orchestrator_agent.py
-- [x] backend/main.py (fixed imports to be relative)
-
-## Changes Needed
-For each agent file, change imports:
-- `from agents.base_agent import BaseAgent` → `from .base_agent import BaseAgent`
-- `from models.*` → `from ..models.*`
-- `from config import settings` → `from ..config import settings`
-- `from agents.executor_agent import ExecutorAgent` → `from .executor_agent import ExecutorAgent` (in orchestrator_agent.py)
-
-## Testing
-After fixes, test by running the main.py to ensure no import errors.
-
-## Status
-✅ All import errors fixed! The application is now running successfully on http://localhost:8000
-✅ Fixed session reset issue - can now regenerate tests even after previous runs
-
-## Usage
-- **API**: http://localhost:8000
-- **Web UI**: http://localhost:8000/ui
-- **Health Check**: http://localhost:8000/health
-
-**Important**: Do NOT open the HTML files directly from the file system. Use the web UI at http://localhost:8000/ui to avoid CORS issues.
-
-## Recent Fixes
-- Modified `/generate-tests` endpoint to automatically reset session if not idle, allowing test regeneration
-- Fixed Python syntax errors in main.py
+## Remaining Tasks
+- [x] Update BaseAgent to use LangChain ChatOpenAI
+- [x] Modify PlannerAgent to use LLM for test generation with RAG
+- [x] Modify RankerAgent to use LLM for ranking
+- [x] Implement RAG system with vector store for test patterns
+- [x] Add embeddings and retrieval for feedback data
+- [x] Update requirements if needed
+- [ ] Test LLM integration
+- [ ] Test RAG retrieval

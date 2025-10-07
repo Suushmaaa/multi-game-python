@@ -5,7 +5,8 @@ import time
 from datetime import datetime
 from playwright.async_api import async_playwright, Page, Browser
 from .base_agent import BaseAgent
-from ..models.test_case import TestCase, TestResult, TestStatus, ExecutionArtifact
+from ..models.test_case import TestCase
+from ..models.test_result import TestResult, TestStatus, ExecutionArtifact
 from ..config import settings
 
 class ExecutorAgent(BaseAgent):

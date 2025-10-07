@@ -3,7 +3,7 @@ import json
 import statistics
 from datetime import datetime
 from .base_agent import BaseAgent
-from ..models.test_case import TestResult, TestStatus, ValidationResult, AnalysisReport
+from ..models.test_result import TestResult, TestStatus, ValidationResult, AnalysisReport
 from ..config import settings
 
 class AnalyzerAgent(BaseAgent):
